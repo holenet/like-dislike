@@ -189,6 +189,7 @@ func router(router *mux.Router, port int) {
 		AllowedOrigins: []string{
 			"http://localhost:5173",
 			"http://localhost:5174",
+			"http://www.holenet.net:8111",
 		},
 		AllowCredentials: true,
 		AllowedMethods: []string{"OPTIONS", "DELETE", "HEAD", "POST", "GET"},
