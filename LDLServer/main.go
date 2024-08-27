@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -174,7 +175,7 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func router(router *mux.Router) {
+func router(router *mux.Router, port int) {
 	router.HandleFunc("/", serveHome)
 	router.HandleFunc("/ws/{topic_id}", func(w http.ResponseWriter, r *http.Request) {
 		serveWs(w, r)
@@ -193,7 +194,7 @@ func router(router *mux.Router) {
 		AllowedMethods: []string{"OPTIONS", "DELETE", "HEAD", "POST", "GET"},
 	}).Handler(router)
 	
-	addr := "0.0.0.0:8080"
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	fmt.Printf("Server start. (%s)", addr)
 	err := http.ListenAndServe(addr, handler)
 	if err != nil {
@@ -202,6 +203,9 @@ func router(router *mux.Router) {
 }
 
 func main() {
+	port := flag.Int("port", 8080, "Server port number")
+	flag.Parse()
+	
 	topics = make(map[uint64]*Topic)
 	topics[1] = &Topic {
 		1,
@@ -219,5 +223,5 @@ func main() {
 	}
 
 	r := mux.NewRouter()
-	router(r)
+	router(r, *port)
 }
