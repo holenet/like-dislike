@@ -168,9 +168,16 @@ func router(router *mux.Router, port int) {
 	}
 }
 
+var port *int
+var jsonpath *string
+func init() {
+	port = flag.Int("port", 8080, "Server port number")
+	jsonpath = flag.String("jsonpath", "db.json", "DB JSON file path")
+}
+
 func main() {
-	port := flag.Int("port", 8080, "Server port number")
 	flag.Parse()
+	dbFilePath = *jsonpath
 	
 	topicManager = TopicManager{
 		loadTopics(),
