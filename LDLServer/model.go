@@ -43,7 +43,7 @@ func (m *TopicManager) getTopic(topicId uint64) (*Topic, bool) {
 	return topic, ok
 }
 func (m *TopicManager) addTopic(topicForm *TopicForm) Topic {
-	nextId := uint64(0)
+	nextId := uint64(1)
 	for id := range m.topics {
 		if nextId <= id {
 			nextId = id + 1

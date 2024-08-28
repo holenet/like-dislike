@@ -1,4 +1,4 @@
-import { useSignal } from "@preact/signals";
+import { batch, useSignal, useSignalEffect } from "@preact/signals";
 import { render } from "preact";
 import { useEffect } from "preact/hooks";
 import "./style.css";
@@ -6,11 +6,13 @@ import { Topic } from "./model";
 import { TopicEntry } from "./TopicEntry";
 import { TopicForm } from "./TopicForm";
 
+const BASE_URL = import.meta.env.BASE_URL;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 function App() {
   const topics = useSignal<Topic[]>([]);
   const currentIndex = useSignal(0);
+  const isTopicsFetched = useSignal(false);
 
   useEffect(() => {
     fetchTopicList();
@@ -19,25 +21,59 @@ function App() {
   const fetchTopicList = async () => {
     const url = `${API_BASE_URL}/topic`;
     const res = await fetch(url);
-    topics.value = (await res.json())
-      .sort((a: Topic, b: Topic) => a.Votes.reduce((s, x) => s + x, 0) - b.Votes.reduce((s, x) => s + x, 0))
+    const _topics: Topic[] = (await res.json())
+      .sort((a: Topic, b: Topic) => {
+        const av = a.Votes.reduce((s, x) => s + x, 0);
+        const bv = b.Votes.reduce((s, x) => s + x, 0);
+        return av === bv ? a.Id - b.Id : av - bv;
+      })
       .reverse();
+
+    const routeTopicId = location.pathname.slice(BASE_URL.length);
+    const index = _topics.findIndex((t) => t.Id === +routeTopicId);
+
+    batch(() => {
+      topics.value = _topics;
+      if (index >= 0) {
+        currentIndex.value = index;
+      }
+    });
+    isTopicsFetched.value = true;
+  };
+
+  useSignalEffect(() => {
+    if (isTopicsFetched.value) changeRoute();
+  });
+
+  const changeRoute = () => {
+    const topic = topics.value[currentIndex.value];
+    if (topic) {
+      window.history.replaceState({}, "", `${BASE_URL}${topic.Id}`);
+      document.title = topic.Content;
+    } else {
+      window.history.replaceState({}, "", `${BASE_URL}`);
+      document.title = "LDL";
+    }
   };
 
   const deleteTopic = async (topicId: number) => {
     const url = `${API_BASE_URL}/topic/${topicId}`;
     try {
       await fetch(url, { method: "DELETE" });
-      topics.value = topics.value.filter((t) => t.Id !== topicId);
-      currentIndex.value = Math.min(currentIndex.value, topics.value.length - 1);
+      batch(() => {
+        topics.value = topics.value.filter((t) => t.Id !== topicId);
+        currentIndex.value = Math.min(currentIndex.value, topics.value.length - 1);
+      });
     } catch (e) {
       console.log("delete error", e);
     }
   };
 
   const onTopicAdded = (topic: Topic) => {
-    topics.value = [...topics.value, topic];
-    currentIndex.value = topics.value.length - 1;
+    batch(() => {
+      topics.value = [...topics.value, topic];
+      currentIndex.value = topics.value.length - 1;
+    });
   };
 
   return (
