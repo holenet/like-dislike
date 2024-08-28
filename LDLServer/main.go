@@ -19,34 +19,7 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 	fmt.Println(r.URL)
 }
 
-type Topic struct {
-	Id uint64
-	Content string
-	Choices []string
-	Votes []uint64
-	Deleted bool
-}
-type TopicForm struct {
-	Content string
-	Choices []string
-}
-
-func (t Topic) isValidVoteIndex(index uint64) bool {
-	return int(index) < len(t.Votes)
-}
-func (t *Topic) makeVotesJson() []byte {
-	bytes, _ := json.Marshal(t.Votes)
-	return bytes
-}
-func (t *Topic) makeJson() []byte {
-	bytes, _ := json.Marshal(*t)
-	return bytes
-}
-func (t *Topic) vote(index uint64) {
-	t.Votes[index]++
-}
-
-var topics map[uint64]*Topic
+var topicManager TopicManager
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -58,12 +31,7 @@ var upgrader = websocket.Upgrader{
 
 func GetTopicList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
-	topicList := make([]Topic, 0)
-	for topicId := range topics {
-		if (!topics[topicId].Deleted) {
-			topicList = append(topicList, *topics[topicId])
-		}
-	}
+	topicList := topicManager. getTopicList()
 	bytes, _ := json.Marshal(topicList)
 	w.Write(bytes)
 }
@@ -79,20 +47,7 @@ func PostTopic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Topic Form is invalid", http.StatusBadRequest)
 		return
 	}
-	nextId := uint64(0)
-	for id := range topics {
-		if nextId <= id {
-			nextId = id + 1
-		}
-	}
-	topic := Topic {
-		nextId,
-		topicForm.Content,
-		topicForm.Choices,
-		make([]uint64, len(topicForm.Choices)),
-		false,
-	}
-	topics[topic.Id] = &topic
+	topic := topicManager.addTopic(&topicForm)
 	w.Header().Add("Content-Type", "application/json")
 	w.Write(topic.makeJson())
 }
@@ -100,11 +55,11 @@ func PostTopic(w http.ResponseWriter, r *http.Request) {
 func GetTopic(w http.ResponseWriter, r *http.Request) {
 	_topic_id, err := strconv.Atoi(mux.Vars(r)["topic_id"])
 	topic_id := uint64(_topic_id)
-	topic, ok := topics[topic_id]
+	topic, ok := topicManager.getTopic(topic_id)
 	if err != nil || !ok {
 		http.Error(w, "Topic Id is invalid", http.StatusBadRequest)
 		return
-	}	
+	}
 	w.Header().Add("Content-Type", "application/json")
 	w.Write(topic.makeJson())
 }	
@@ -112,37 +67,41 @@ func GetTopic(w http.ResponseWriter, r *http.Request) {
 func DeleteTopic(w http.ResponseWriter, r *http.Request) {
 	_topic_id, err := strconv.Atoi(mux.Vars(r)["topic_id"])
 	topic_id := uint64(_topic_id)
-	topic, ok := topics[topic_id]
+	_, ok := topicManager.getTopic(topic_id)
 	if err != nil || !ok {
 		http.Error(w, "Topic Id is invalid", http.StatusBadRequest)
 		return
-	}	
-	topic.Deleted = true
+	}
+	ok = topicManager.deleteTopic(topic_id)
+	if !ok {
+		http.Error(w, "Delete Topic failed", http.StatusBadRequest)
+		return
+	}
 }
 
 func PostVote(w http.ResponseWriter, r *http.Request) {
 	_topic_id, err := strconv.Atoi(mux.Vars(r)["topic_id"])
 	topic_id := uint64(_topic_id)
-	topic, ok := topics[topic_id]
+	_, ok := topicManager.getTopic(topic_id)
 	if err != nil || !ok {
 		http.Error(w, "Topic Id is invalid", http.StatusBadRequest)
 		return
 	}
-	_vote_index, err := strconv.Atoi(mux.Vars(r)["vote_index"])
-	vote_index := uint64(_vote_index)
-	if err != nil || !topic.isValidVoteIndex(vote_index) {
-		http.Error(w, "Topic Id is invalid", http.StatusBadRequest)
+	vote_index, err := strconv.Atoi(mux.Vars(r)["vote_index"])
+	if err != nil {
+		http.Error(w, "Vote index is invalid", http.StatusBadRequest)
 		return
 	}
-	topic.vote(vote_index)
+	votes := topicManager.vote(topic_id, vote_index)
+	bytes, _ := json.Marshal(votes)
 	w.Header().Add("Content-Type", "application/json")
-	w.Write(topic.makeVotesJson())
+	w.Write(bytes)
 }
 
 func serveWs(w http.ResponseWriter, r *http.Request) {
 	_topic_id, err := strconv.Atoi(mux.Vars(r)["topic_id"])
 	topic_id := uint64(_topic_id)
-	topic, ok := topics[topic_id]
+	topic, ok := topicManager.getTopic(topic_id)
 	if err != nil || !ok {
 		http.Error(w, "Topic Id is invalid", http.StatusBadRequest)
 		return
@@ -161,17 +120,23 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 	defer tick.Stop()
 	
 	conn.WriteJSON(topic.Votes)
-	for {
-		select {
-		case <- tick.C:
-			if topic.Deleted {
-				return
-			}
-			if err := conn.WriteJSON(topic.Votes); err != nil {
-				// log.Println("Websocket Connection Closed.")
-				return
-			}
+	for range tick.C {
+		if topic.Deleted {
+			return
 		}
+		if err := conn.WriteJSON(topic.Votes); err != nil {
+			// log.Println("Websocket Connection Closed.")
+			return
+		}
+	}
+}
+
+func flushDataPeriodically() {
+	tick := time.NewTicker(time.Second * 10)
+	defer tick.Stop()
+
+	for range tick.C {
+		saveTopics(topicManager.topics)
 	}
 }
 
@@ -196,7 +161,7 @@ func router(router *mux.Router, port int) {
 	}).Handler(router)
 	
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	fmt.Printf("Server start. (%s)", addr)
+	log.Printf("Server start. (%s)", addr)
 	err := http.ListenAndServe(addr, handler)
 	if err != nil {
 		log.Fatalln("ListenAndServe: ", err)
@@ -207,21 +172,10 @@ func main() {
 	port := flag.Int("port", 8080, "Server port number")
 	flag.Parse()
 	
-	topics = make(map[uint64]*Topic)
-	topics[1] = &Topic {
-		1,
-		"A vs B",
-		[]string{"A", "B"},
-		make([]uint64, 2),
-		false,
+	topicManager = TopicManager{
+		loadTopics(),
 	}
-	topics[2] = &Topic {
-		2,
-		"C vs D",
-		[]string{"C", "D"},
-		make([]uint64, 2),
-		false,
-	}
+	go flushDataPeriodically()
 
 	r := mux.NewRouter()
 	router(r, *port)
