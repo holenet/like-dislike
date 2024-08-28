@@ -33,7 +33,7 @@ export function TopicEntry({ topic: _topic, colorOffset }: Props) {
 
   const openWebsocket = () => {
     if (connectedWebSocket.current) connectedWebSocket.current.close();
-    const conn = new WebSocket(`${API_BASE_URL}/ws/${topic.value.Id}`);
+    const conn = new WebSocket(`${API_BASE_URL.replace("http", "ws")}/ws/${topic.value.Id}`);
     conn.onopen = (ev: Event) => {
       // connected.value = true;
     };
